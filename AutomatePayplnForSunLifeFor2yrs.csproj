@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Selenium 4 / PdfPig require at least .NET Framework 4.6.2.
+         True C# 5 / .NET 4.5 cannot restore these packages.
+         LangVersion is pinned to 5 so the source stays C# 5 compatible. -->
+    <TargetFramework>net462</TargetFramework>
+    <LangVersion>5</LangVersion>
+    <AssemblyName>AutomatePayplnForSunLifeFor2yrs</AssemblyName>
+    <RootNamespace>AutomatePayplnForSunLifeFor2yrs</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Selenium.WebDriver" Version="4.18.1" />
+    <PackageReference Include="WebDriverManager" Version="2.17.4" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="PdfPig" Version="0.1.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="config.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

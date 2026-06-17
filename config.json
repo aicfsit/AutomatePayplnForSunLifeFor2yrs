@@ -1,0 +1,35 @@
+{
+  "url": "https://mysunlife.sunlife.com.hk/awb/#/login",
+  "connectionString": "Server=172.16.10.2;Database=ERP_IBS_01062026;User Id=sa;Password=!cig#2024;TrustServerCertificate=True;",
+  "credentialAppKey": "SunLifePortal",
+
+
+  "headless": false,
+  "stepDelayMs": 1500,
+  "pageLoadTimeoutSec": 60,
+  "elementWaitTimeoutSec": 30,
+  "retryDelayMs": 5000,
+  "mfaWaitTimeoutSec": 180,
+  "login": {
+    "englishLanguageXPath": "//button[normalize-space()='English' or contains(.,'English') or normalize-space()='EN'] | //a[normalize-space()='English' or contains(.,'English')] | //*[@id='root']/div/div[3]/div[2]/div/div/div[1]/div[1]/div/button[1]",
+    "signInButtonXPath": "//*[@id='signin-button']",
+    "usernameXPath": "//*[@id='okta-signin-username']",
+    "passwordXPath": "//*[@id='okta-signin-password']",
+    "submitXPath": "//*[@id='okta-signin-submit']",
+    "mfaDetectXPath": "//*[contains(@class,'mfa') or contains(text(),'verification') or contains(text(),'Verify')]",
+    "loginSuccessXPath": "//*[@id='root']",
+    "loginSuccessUrl": "mysunlife.sunlife.com.hk/awb"
+  },
+
+  "xpaths": {
+    "searchClientButton": "//*[@id='root']/div/div[2]/div[1]/div[2]/div[1]/div/div/div/div/div/div[2]/div/button",
+    "searchBody": "//*[@id='search-body']",
+    "resultButton": "//*[@id='mainContent']/div[2]/div",
+    "firstDiv": "//*[@id='mainContent']/div[1]",
+    "documentsTab": "//*[@id='policy-detail-tab-tab-Documents']",
+    "premiumPaymentNotices": "//*[@id='policy-detail-tab-tabpane-Documents']/div/div[5]",
+    "firstDocDiv": "//*[@id='mainContent']/div/div[2]/div[2]"
+  },
+
+  "totalPayableLabel": "Total Payable Amount"
+}
