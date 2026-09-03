@@ -35,7 +35,7 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                 Console.WriteLine("");
                 Console.WriteLine("---- [" + counter + "/" + policies.Count + "] polcod=" +
                     policy.PolCod + " polrefno=" + policy.PolRefNo + " ----");
-
+                _helper.Delay(5000);
                 ProcessResult result = ProcessWithRetry(policy, mainWindow);
                 results.Add(result);
 
@@ -63,6 +63,8 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
         // One retry with a delay, per your instruction.
         private ProcessResult ProcessWithRetry(PolicyItem policy, string mainWindow)
         {
+
+            
             ProcessResult result = ProcessOne(policy, mainWindow);
 
             if (result.Status == "Failed")
@@ -93,20 +95,17 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             try
             {
                 // a. Click SearchClient
+                _helper.Delay(4000);
                 _helper.Click(_config.XPaths.SearchClientButton);
-                _helper.Delay(3000);
+                _helper.Delay(4000);
                 // b. Enter polcod and submit
                 _helper.Type(_config.XPaths.SearchBody, policy.PolCod);
                 _helper.WaitForVisible(_config.XPaths.SearchBody)
                     .SendKeys(Keys.Enter);
-                _helper.Delay(3000);
+                _helper.Delay(4000);
 
                 // c. Click result button
-                // c. Click result card. Prefer the card that contains the current
-                // polcod (handles cases where multiple results appear); fall back to
-                // the fixed result xpath if the text match isn't found.
-                // We target the deepest div that holds the polcod text so we click
-                // the card itself rather than an outer wrapper.
+            
                 string resultByText =
                     "//*[@id='mainContent']//div[contains(normalize-space(.),'" +
                     policy.PolCod + "') and not(.//div[contains(normalize-space(.),'" +
@@ -122,10 +121,10 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                         "may not have loaded). polcod=" + policy.PolCod +
                         " | Current URL: " + _helper.CurrentUrl());
                 }
-                _helper.Delay(2000);
+                
                 // d. Click first div
                 //_helper.Click(_config.XPaths.FirstDiv);
-                _helper.Delay(3000);
+                _helper.Delay(4000);
                 // e. Open Documents tab
                 _helper.Click(_config.XPaths.DocumentsTab);
                 _helper.Delay(5000);

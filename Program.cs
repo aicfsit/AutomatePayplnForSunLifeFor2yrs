@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
-using WebDriverManager;
-using WebDriverManager.DriverConfigs.Impl;
 using AutomatePayplnForSunLifeFor2yrs.Models;
 using AutomatePayplnForSunLifeFor2yrs.Services;
 
@@ -13,7 +11,27 @@ namespace AutomatePayplnForSunLifeFor2yrs
     {
         static void Main(string[] args)
         {
-            string configPath = args.Length > 0 ? args[0] : "config.json";
+            string configPath = "config.json";
+            bool driverTestOnly = false;
+
+            foreach (string a in args)
+            {
+                if (a.Equals("--test-driver", StringComparison.OrdinalIgnoreCase))
+                {
+                    driverTestOnly = true;
+                }
+                else
+                {
+                    configPath = a;
+                }
+            }
+
+            if (driverTestOnly)
+            {
+                RunDriverSelfTest();
+                return;
+            }
+
             IWebDriver driver = null;
 
             try
@@ -56,10 +74,6 @@ namespace AutomatePayplnForSunLifeFor2yrs
                     return;
                 }
 
-                // Auto-download the ChromeDriver matching the installed Chrome.
-                Console.WriteLine("Setting up ChromeDriver...");
-                new DriverManager().SetUpDriver(new ChromeConfig());
-
                 ChromeOptions options = new ChromeOptions();
                 options.AddArgument("--start-maximized");
                 options.AddArgument("--disable-notifications");
@@ -70,7 +84,11 @@ namespace AutomatePayplnForSunLifeFor2yrs
                     options.AddArgument("--window-size=1920,1080");
                 }
 
-                driver = new ChromeDriver(options);
+                // Resolves a chromedriver.exe whose major version matches the
+                // installed Chrome and starts the service against that exact
+                // binary. See ChromeDriverFactory for why the path is explicit.
+                Console.WriteLine("Setting up ChromeDriver...");
+                driver = ChromeDriverFactory.Create(options, config.PageLoadTimeoutSec);
                 driver.Manage().Timeouts().PageLoad =
                     TimeSpan.FromSeconds(config.PageLoadTimeoutSec);
                 // Required for the blob fetch in PdfAmountExtractor.
@@ -108,6 +126,37 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 Console.WriteLine("");
                 Console.WriteLine("Press any key to exit...");
                 Console.ReadKey();
+            }
+        }
+        // Checks Chrome/ChromeDriver version matching on its own, without
+        // touching the database or the portal:
+        //   AutomatePayplnForSunLifeFor2yrs.exe --test-driver
+        static void RunDriverSelfTest()
+        {
+            IWebDriver driver = null;
+            try
+            {
+                ChromeOptions options = new ChromeOptions();
+                options.AddArgument("--headless=new");
+                options.AddArgument("--window-size=1920,1080");
+
+                Console.WriteLine("Setting up ChromeDriver...");
+                driver = ChromeDriverFactory.Create(options, 60);
+
+                driver.Navigate().GoToUrl("about:blank");
+                Console.WriteLine("SUCCESS: Chrome started and accepted a command.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("FAILED: " + ex.Message);
+            }
+            finally
+            {
+                if (driver != null)
+                {
+                    try { driver.Quit(); }
+                    catch { }
+                }
             }
         }
 
