@@ -1,6 +1,6 @@
 {
   "url": "https://mysunlife.sunlife.com.hk/awb/#/login",
-  "connectionString": "Server=172.16.10.2;Database=ERP_IBS_09072026;User Id=sa;Password=!cig#2024;TrustServerCertificate=True;",
+  "connectionString": "Server=172.16.10.2;Database=ERP_IBS_04092026;User Id=sa;Password=!cig#2024;TrustServerCertificate=True;",
   "credentialAppKey": "SunLifePortal",
 
 
@@ -25,7 +25,7 @@
     "searchClientButton": "//*[@id='root']/div/div[2]/div[1]/div[2]/div[1]/div/div/div/div/div/div[2]/div/button",
     "searchBody": "//*[@id='search-body']",
     "resultButton": "//*[@id='mainContent']/div[2]/div",
-    "firstDiv": "//*[@id='mainContent']/div[1]",
+    "firstDiv": "//*[@id='mainContent']/div[2]",
     "documentsTab": "//*[@id='policy-detail-tab-tab-Documents']",
     "premiumPaymentNotices": "//*[@id='policy-detail-tab-tabpane-Documents']/div/div[5]",
     "firstDocDiv": "//*[@id='mainContent']/div/div[2]/div[2]"
