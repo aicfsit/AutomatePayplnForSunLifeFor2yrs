@@ -12,15 +12,18 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
         private readonly AppConfig _config;
         private readonly DatabaseService _db;
         private readonly PdfAmountExtractor _pdf;
+        private readonly string _entity;
 
         public ExtractionService(IWebDriver driver, SeleniumHelper helper,
-            AppConfig config, DatabaseService db, PdfAmountExtractor pdf)
+            AppConfig config, DatabaseService db, PdfAmountExtractor pdf,
+            string entity)
         {
             _driver = driver;
             _helper = helper;
             _config = config;
             _db = db;
             _pdf = pdf;
+            _entity = entity;
         }
 
         public List<ProcessResult> Run(List<PolicyItem> policies)
@@ -33,8 +36,9 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             {
                 counter++;
                 Console.WriteLine("");
-                Console.WriteLine("---- [" + counter + "/" + policies.Count + "] polcod=" +
-                    policy.PolCod + " polrefno=" + policy.PolRefNo + " ----");
+                Console.WriteLine("---- [" + _entity + " " + counter + "/" +
+                    policies.Count + "] polcod=" + policy.PolCod +
+                    " polrefno=" + policy.PolRefNo + " ----");
                 _helper.Delay(5000);
                 ProcessResult result = ProcessWithRetry(policy, mainWindow);
                 results.Add(result);
@@ -89,16 +93,51 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
         private ProcessResult ProcessOne(PolicyItem policy, string mainWindow)
         {
             ProcessResult result = new ProcessResult();
+            result.Entity = _entity;
             result.PolRefNo = policy.PolRefNo;
             result.PolCod = policy.PolCod;
 
             try
             {
-                // a. Click SearchClient
+                // a. Click SearchClient. Matched by its label first: the
+                // positional path sits next to the Broker Buddy button in the
+                // header and can land on that instead, which opens the chatbot
+                // in a new tab and leaves the search never having happened.
                 _helper.Delay(4000);
-                _helper.Click(_config.XPaths.SearchClientButton);
+                IList<string> tabsBeforeSearch = _helper.WindowHandles();
+
+                if (!_helper.SafeClick(_config.XPaths.SearchClientButton) &&
+                    !_helper.SafeClick(_config.XPaths.SearchClientButtonFallback))
+                {
+                    throw new Exception("Could not click 'Search clients'. " +
+                        "Current URL: " + _helper.CurrentUrl());
+                }
                 _helper.Delay(4000);
-                // b. Enter polcod and submit
+
+                // If that click opened a tab, it hit the wrong control.
+                if (_helper.WindowHandles().Count > tabsBeforeSearch.Count)
+                {
+                    Console.WriteLine("  WARNING: clicking 'Search clients' opened a " +
+                        "new tab; the xpath is hitting the wrong control. Closing it.");
+                    _helper.CloseTabsExceptUrl(_config.Login.LoginSuccessUrl);
+                }
+                // b. Switch to the Policies tab. The page opens on Clients, and
+                // a polcod searched there matches nothing. Selected before
+                // typing, since changing tab can reset the search box.
+                if (!string.IsNullOrEmpty(_config.XPaths.SearchPoliciesTab))
+                {
+                    if (_helper.SafeClick(_config.XPaths.SearchPoliciesTab))
+                    {
+                        _helper.Delay(2000);
+                    }
+                    else
+                    {
+                        Console.WriteLine("  WARNING: could not select the 'Policies' " +
+                            "tab; searching under 'Clients' will return no results.");
+                    }
+                }
+
+                // c. Enter polcod and submit
                 _helper.Type(_config.XPaths.SearchBody, policy.PolCod);
                 _helper.WaitForVisible(_config.XPaths.SearchBody)
                     .SendKeys(Keys.Enter);
@@ -141,10 +180,14 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                 // g. Click first doc div -> new blob tab opens
                 _helper.Click(_config.XPaths.PremiumPaymentNotices);
                 _helper.Delay(5000);
+
+                // Capture the tabs open right now, so the document tab is
+                // identified by being new rather than by the window count.
+                IList<string> tabsBeforeOpen = _helper.WindowHandles();
                 _helper.Click(_config.XPaths.FirstDocDiv);
 
                 // h. Switch to new tab and read the blob PDF
-                string newTab = _helper.SwitchToNewTab(mainWindow);
+                string newTab = _helper.SwitchToNewTab(tabsBeforeOpen);
                 _helper.Delay(2000);
 
                 string blobUrl = _helper.CurrentUrl();

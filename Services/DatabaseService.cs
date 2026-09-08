@@ -27,9 +27,19 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                 "    Username VARCHAR(200) NOT NULL, " +
                 "    [Password] VARCHAR(200) NOT NULL, " +
                 "    IsActive BIT NOT NULL DEFAULT 1, " +
-                "    UpdatedOn DATETIME NOT NULL DEFAULT GETDATE() " +
+                "    UpdatedOn DATETIME NOT NULL DEFAULT GETDATE(), " +
+                "    entity VARCHAR(50) NULL, " +
+                "    StoredProcedure VARCHAR(200) NULL " +
                 "  ) " +
-                "END";
+                "END " +
+                // Existing installs predate these columns.
+                "IF COL_LENGTH('dbo.AutomationCredentials','entity') IS NULL " +
+                "  ALTER TABLE dbo.AutomationCredentials ADD entity VARCHAR(50) NULL; " +
+                "IF COL_LENGTH('dbo.AutomationCredentials','StoredProcedure') IS NULL " +
+                "  ALTER TABLE dbo.AutomationCredentials " +
+                "    ADD StoredProcedure VARCHAR(200) NULL; " +
+                "IF COL_LENGTH('dbo.AutomationCredentials','ACTCOD') IS NULL " +
+                "  ALTER TABLE dbo.AutomationCredentials ADD ACTCOD VARCHAR(50) NULL;";
 
             using (SqlConnection conn = new SqlConnection(_connectionString))
             {
@@ -41,32 +51,67 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             }
         }
 
-        // Read the active portal credentials for the given app key.
-        public PortalCredential GetPortalCredential(string appKey)
+        // Every active row is one entity to process. This table is the single
+        // source of truth for what runs: add a row to add an entity, set
+        // IsActive = 0 to stop one, with no code or config change.
+        public List<EntityRegistration> GetActiveEntities()
         {
+            List<EntityRegistration> list = new List<EntityRegistration>();
+
             string sql =
-                "SELECT TOP 1 Username, [Password] FROM dbo.AutomationCredentials " +
-                "WHERE AppKey = @key AND IsActive = 1 ORDER BY UpdatedOn DESC";
+                "SELECT Id, AppKey, Username, [Password], entity, " +
+                "       StoredProcedure, ACTCOD " +
+                "FROM dbo.AutomationCredentials " +
+                "WHERE IsActive = 1 ORDER BY Id";
 
             using (SqlConnection conn = new SqlConnection(_connectionString))
             {
                 conn.Open();
                 using (SqlCommand cmd = new SqlCommand(sql, conn))
                 {
-                    cmd.Parameters.Add("@key", SqlDbType.VarChar, 50).Value = appKey;
                     using (SqlDataReader reader = cmd.ExecuteReader())
                     {
-                        if (reader.Read())
+                        while (reader.Read())
                         {
-                            PortalCredential c = new PortalCredential();
-                            c.Username = reader.IsDBNull(0) ? null : reader.GetString(0);
-                            c.Password = reader.IsDBNull(1) ? null : reader.GetString(1);
-                            return c;
+                            EntityRegistration e = new EntityRegistration();
+                            e.Id = reader.GetInt32(0);
+                            e.AppKey = ReadTrimmed(reader, 1);
+                            e.Username = ReadTrimmed(reader, 2);
+                            e.Password = reader.IsDBNull(3) ? null : reader.GetString(3);
+                            e.Name = ReadTrimmed(reader, 4);
+                            e.StoredProcedure = ReadTrimmed(reader, 5);
+                            e.ActCod = ReadTrimmed(reader, 6);
+                            list.Add(e);
                         }
                     }
                 }
             }
-            return null;
+
+            return list;
+        }
+
+        private static string ReadTrimmed(SqlDataReader reader, int ordinal)
+        {
+            return reader.IsDBNull(ordinal)
+                ? null : reader.GetValue(ordinal).ToString().Trim();
+        }
+
+        // True if the stored procedure exists. Checked before the browser
+        // starts so a bad name in config fails fast instead of after a login.
+        public bool ProcedureExists(string procedureName)
+        {
+            using (SqlConnection conn = new SqlConnection(_connectionString))
+            {
+                conn.Open();
+                using (SqlCommand cmd = new SqlCommand(
+                    "SELECT CASE WHEN OBJECT_ID(@name,'P') IS NULL THEN 0 ELSE 1 END",
+                    conn))
+                {
+                    cmd.Parameters.Add("@name", SqlDbType.NVarChar, 260).Value =
+                        procedureName;
+                    return Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+                }
+            }
         }
 
         // Make sure the tracking table exists before we start.
@@ -77,6 +122,7 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                 "BEGIN " +
                 "  CREATE TABLE dbo.PremiumExtractionLog ( " +
                 "    Id INT IDENTITY(1,1) PRIMARY KEY, " +
+                "    Entity VARCHAR(50) NULL, " +
                 "    polrefno VARCHAR(50) NULL, " +
                 "    polcod VARCHAR(50) NULL, " +
                 "    Amount MONEY NULL, " +
@@ -84,7 +130,10 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                 "    Message VARCHAR(500) NULL, " +
                 "    [Date] DATETIME NOT NULL DEFAULT GETDATE() " +
                 "  ) " +
-                "END";
+                "END " +
+                // Existing installs predate the Entity column.
+                "IF COL_LENGTH('dbo.PremiumExtractionLog','Entity') IS NULL " +
+                "  ALTER TABLE dbo.PremiumExtractionLog ADD Entity VARCHAR(50) NULL";
 
             using (SqlConnection conn = new SqlConnection(_connectionString))
             {
@@ -96,19 +145,117 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             }
         }
 
-        // Run the stored procedure and pull the policy list from its result set.
-        public List<PolicyItem> GetPoliciesFromStoredProc()
+        // True if the procedure declares an ACTCOD parameter. Entities share one
+        // procedure, so a missing ACTCOD would silently give every entity the
+        // same policy list; the caller checks this before running anything.
+        public bool ProcedureHasActCodParameter(string procedureName)
         {
+            return FindActCodParameter(procedureName) != null;
+        }
+
+        // Look up the procedure's own ACTCOD parameter so its real name and
+        // declared type are used, instead of assuming "@ACTCOD" and a type.
+        // Returns null if the procedure has no such parameter.
+        private SqlParameter FindActCodParameter(string procedureName)
+        {
+            if (string.IsNullOrEmpty(procedureName))
+            {
+                return null;
+            }
+
+            using (SqlConnection conn = new SqlConnection(_connectionString))
+            {
+                conn.Open();
+                using (SqlCommand probe = new SqlCommand(procedureName, conn))
+                {
+                    probe.CommandType = CommandType.StoredProcedure;
+                    try
+                    {
+                        SqlCommandBuilder.DeriveParameters(probe);
+                    }
+                    catch (Exception)
+                    {
+                        // No permission to read the definition, or no such proc.
+                        return null;
+                    }
+
+                    foreach (SqlParameter p in probe.Parameters)
+                    {
+                        if (p.Direction == ParameterDirection.ReturnValue ||
+                            p.ParameterName == null)
+                        {
+                            continue;
+                        }
+
+                        if (p.ParameterName.TrimStart('@').IndexOf(
+                            "actcod", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            SqlParameter found =
+                                new SqlParameter(p.ParameterName, p.SqlDbType);
+                            if (p.Size > 0)
+                            {
+                                found.Size = p.Size;
+                            }
+                            return found;
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        // Run the entity's stored procedure and pull its policy list.
+        // actCod selects which entity's policies the procedure returns.
+        public List<PolicyItem> GetPoliciesFromStoredProc(
+            string procedureName, string actCod)
+        {
+            if (string.IsNullOrEmpty(procedureName))
+            {
+                throw new ArgumentException(
+                    "No stored procedure configured for this entity.");
+            }
+
+            SqlParameter actCodParam = FindActCodParameter(procedureName);
+
             List<PolicyItem> list = new List<PolicyItem>();
 
             using (SqlConnection conn = new SqlConnection(_connectionString))
             {
                 conn.Open();
-                using (SqlCommand cmd = new SqlCommand(
-                    "SP_PREMIUM_DUE_NOTIFICATION_JUVO_NEW_FOR_SECONDYRPAYPLN", conn))
+                using (SqlCommand cmd = new SqlCommand(procedureName, conn))
                 {
                     cmd.CommandType = CommandType.StoredProcedure;
                     cmd.CommandTimeout = 300;
+
+                    if (actCodParam != null)
+                    {
+                        // The parameter is scalar, and T-SQL does not expand a
+                        // list inside IN (@p). "3449,3458" would match nothing.
+                        if (actCod != null && actCod.IndexOf(',') >= 0)
+                        {
+                            Console.WriteLine("  WARNING: ACTCOD '" + actCod +
+                                "' looks like a list. " + actCodParam.ParameterName +
+                                " is a single value; use one row per code.");
+                        }
+
+                        // Silent truncation to the declared size would turn into
+                        // an empty result set that looks like "no policies due".
+                        if (actCodParam.Size > 0 && actCod != null &&
+                            actCod.Length > actCodParam.Size)
+                        {
+                            throw new Exception("ACTCOD '" + actCod + "' is " +
+                                actCod.Length + " characters but " +
+                                actCodParam.ParameterName + " accepts only " +
+                                actCodParam.Size + "; it would be truncated.");
+                        }
+
+                        actCodParam.Value = string.IsNullOrEmpty(actCod)
+                            ? (object)DBNull.Value : actCod;
+                        cmd.Parameters.Add(actCodParam);
+                        Console.WriteLine("  passing " + actCodParam.ParameterName +
+                            " = " + actCod);
+                    }
 
                     using (SqlDataReader reader = cmd.ExecuteReader())
                     {
@@ -154,14 +301,16 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
         {
             string sql =
                 "INSERT INTO dbo.PremiumExtractionLog " +
-                "(polrefno, polcod, Amount, Status, Message, [Date]) " +
-                "VALUES (@ref, @cod, @amt, @status, @msg, GETDATE())";
+                "(Entity, polrefno, polcod, Amount, Status, Message, [Date]) " +
+                "VALUES (@entity, @ref, @cod, @amt, @status, @msg, GETDATE())";
 
             using (SqlConnection conn = new SqlConnection(_connectionString))
             {
                 conn.Open();
                 using (SqlCommand cmd = new SqlCommand(sql, conn))
                 {
+                    cmd.Parameters.Add("@entity", SqlDbType.VarChar, 50).Value =
+                        (object)result.Entity ?? DBNull.Value;
                     cmd.Parameters.Add("@ref", SqlDbType.VarChar, 50).Value =
                         (object)result.PolRefNo ?? DBNull.Value;
                     cmd.Parameters.Add("@cod", SqlDbType.VarChar, 50).Value =

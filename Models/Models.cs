@@ -11,7 +11,11 @@ namespace AutomatePayplnForSunLifeFor2yrs.Models
         public string Username { get; set; }
         public string Password { get; set; }
         public string ConnectionString { get; set; }
-        public string CredentialAppKey { get; set; }
+
+        // Entities are NOT configured here. Every active row in
+        // dbo.AutomationCredentials is one entity: its AppKey, entity name and
+        // StoredProcedure drive the run. config.json only has to know how to
+        // reach the database.
 
         public bool Headless { get; set; }
         public int StepDelayMs { get; set; }
@@ -23,6 +27,24 @@ namespace AutomatePayplnForSunLifeFor2yrs.Models
         public LoginConfig Login { get; set; }
         public XPathConfig XPaths { get; set; }
         public string TotalPayableLabel { get; set; }
+    }
+
+    // One active row of dbo.AutomationCredentials: a portal login plus the
+    // stored procedure returning that entity's policies.
+    public class EntityRegistration
+    {
+        public int Id { get; set; }
+        // AppKey column: SunLifePortalJUVO, SunLifePortalDIFC, ...
+        public string AppKey { get; set; }
+        // entity column. Labels the run and the PremiumExtractionLog rows.
+        public string Name { get; set; }
+        // StoredProcedure column: returns "IBS #" and polcod for this entity.
+        // The same procedure serves every entity; ACTCOD selects which one.
+        public string StoredProcedure { get; set; }
+        public string ActCod { get; set; }
+
+        public string Username { get; set; }
+        public string Password { get; set; }
     }
 
     public class LoginConfig
@@ -40,19 +62,17 @@ namespace AutomatePayplnForSunLifeFor2yrs.Models
     public class XPathConfig
     {
         public string SearchClientButton { get; set; }
+        // Positional path kept as a fallback for when the label changes.
+        public string SearchClientButtonFallback { get; set; }
+        // The search page opens on "Clients"; polcod only matches under
+        // "Policies", so that tab has to be selected before searching.
+        public string SearchPoliciesTab { get; set; }
         public string SearchBody { get; set; }
         public string ResultButton { get; set; }
         public string FirstDiv { get; set; }
         public string DocumentsTab { get; set; }
         public string PremiumPaymentNotices { get; set; }
         public string FirstDocDiv { get; set; }
-    }
-
-    // Portal login credentials read from dbo.AutomationCredentials.
-    public class PortalCredential
-    {
-        public string Username { get; set; }
-        public string Password { get; set; }
     }
 
     // One policy to process, sourced from the stored procedure.
@@ -65,6 +85,7 @@ namespace AutomatePayplnForSunLifeFor2yrs.Models
     // Result of processing a single policy.
     public class ProcessResult
     {
+        public string Entity { get; set; }
         public string PolRefNo { get; set; }
         public string PolCod { get; set; }
         public decimal? Amount { get; set; }

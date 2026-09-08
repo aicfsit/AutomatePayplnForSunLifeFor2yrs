@@ -76,9 +76,67 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
         public void Type(string xpath, string text)
         {
             IWebElement el = WaitForVisible(xpath);
-            el.Clear();
+
+            ClearInput(el);
             el.SendKeys(text);
+
+            // React re-renders can restore the old text, leaving the new text
+            // appended to it ("611199467611199467..."), which then matches no
+            // policy. Verify what actually landed and retype once if wrong.
+            string actual = ReadValue(el);
+            if (actual != null && !actual.Equals(text, StringComparison.Ordinal))
+            {
+                Console.WriteLine("  search box held '" + actual +
+                    "' instead of '" + text + "'; clearing and retyping.");
+
+                el = WaitForVisible(xpath);
+                ClearInput(el);
+                el.SendKeys(text);
+
+                actual = ReadValue(el);
+                if (actual != null && !actual.Equals(text, StringComparison.Ordinal))
+                {
+                    throw new Exception("Could not set the search box to '" + text +
+                        "'; it still reads '" + actual + "'.");
+                }
+            }
+
             Delay();
+        }
+
+        // Clear() sets the DOM value but a React-controlled input does not see
+        // that, so the old text comes back. Select-all followed by Delete goes
+        // through real key events, which React does process.
+        private void ClearInput(IWebElement el)
+        {
+            try { el.Clear(); }
+            catch (Exception) { }
+
+            try
+            {
+                el.SendKeys(Keys.Control + "a");
+                el.SendKeys(Keys.Delete);
+            }
+            catch (Exception) { }
+
+            // Last resort for inputs that ignore both of the above.
+            if (!string.IsNullOrEmpty(ReadValue(el)))
+            {
+                try
+                {
+                    for (int i = 0; i < 60; i++)
+                    {
+                        el.SendKeys(Keys.Backspace);
+                    }
+                }
+                catch (Exception) { }
+            }
+        }
+
+        private string ReadValue(IWebElement el)
+        {
+            try { return el.GetAttribute("value"); }
+            catch (Exception) { return null; }
         }
 
         public void Click(string xpath)
@@ -188,25 +246,82 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             return new List<string>(_driver.WindowHandles);
         }
 
-        // Wait for a new tab to appear and switch to it. Returns the new handle.
-        public string SwitchToNewTab(string originalHandle)
+        // Wait for a tab that was NOT open before the click, and switch to it.
+        //
+        // Pass the handles captured immediately before the action that opens
+        // the tab. Counting windows is not enough: the portal opens tabs of its
+        // own after login (the Broker Buddy chatbot), so a "more than one
+        // window" test is already true and would latch onto the wrong tab.
+        public string SwitchToNewTab(IList<string> knownHandles)
         {
             WebDriverWait wait = new WebDriverWait(_driver, TimeSpan.FromSeconds(_waitSec));
-            wait.Until(new Func<IWebDriver, bool>(
+
+            // WebDriverWait retries while the delegate returns null.
+            string opened = wait.Until(new Func<IWebDriver, string>(
                 delegate(IWebDriver d)
                 {
-                    return d.WindowHandles.Count > 1;
+                    foreach (string handle in d.WindowHandles)
+                    {
+                        if (!knownHandles.Contains(handle))
+                        {
+                            return handle;
+                        }
+                    }
+                    return null;
                 }));
 
-            foreach (string handle in _driver.WindowHandles)
+            _driver.SwitchTo().Window(opened);
+            return opened;
+        }
+
+        // Close every tab whose URL does not contain the given fragment and
+        // return the handle we kept. The portal opens extra tabs after login;
+        // this settles the session back onto the policy page.
+        public string CloseTabsExceptUrl(string urlFragment)
+        {
+            string kept = null;
+
+            foreach (string handle in WindowHandles())
             {
-                if (handle != originalHandle)
+                try
                 {
                     _driver.SwitchTo().Window(handle);
-                    return handle;
+
+                    bool isPortal = string.IsNullOrEmpty(urlFragment) ||
+                        (_driver.Url != null && _driver.Url.IndexOf(
+                            urlFragment, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    if (isPortal && kept == null)
+                    {
+                        kept = handle;
+                    }
+                    else
+                    {
+                        Console.WriteLine("Closing extra tab: " + _driver.Url);
+                        _driver.Close();
+                    }
+                }
+                catch (Exception)
+                {
+                    // A tab that vanished on its own is fine to ignore.
                 }
             }
-            return originalHandle;
+
+            // Nothing matched the portal URL: keep whatever is still open.
+            if (kept == null)
+            {
+                IList<string> remaining = WindowHandles();
+                if (remaining.Count > 0)
+                {
+                    kept = remaining[0];
+                }
+            }
+
+            if (kept != null)
+            {
+                _driver.SwitchTo().Window(kept);
+            }
+            return kept;
         }
 
         public void CloseTabAndReturn(string returnHandle)

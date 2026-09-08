@@ -1,9 +1,6 @@
 {
   "url": "https://mysunlife.sunlife.com.hk/awb/#/login",
   "connectionString": "Server=172.16.10.2;Database=ERP_IBS_04092026;User Id=sa;Password=!cig#2024;TrustServerCertificate=True;",
-  "credentialAppKey": "SunLifePortal",
-
-
   "headless": false,
   "stepDelayMs": 1500,
   "pageLoadTimeoutSec": 60,
@@ -22,7 +19,9 @@
   },
 
   "xpaths": {
-    "searchClientButton": "//*[@id='root']/div/div[2]/div[1]/div[2]/div[1]/div/div/div/div/div/div[2]/div/button",
+    "searchClientButton": "//*[self::button or self::a or @role='button'][contains(normalize-space(.),'Search clients')][not(contains(normalize-space(.),'Broker Buddy'))]",
+    "searchClientButtonFallback": "//*[@id='root']/div/div[2]/div[1]/div[2]/div[1]/div/div/div/div/div/div[2]/div/button",
+    "searchPoliciesTab": "//*[@role='tab'][normalize-space()='Policies'] | //button[normalize-space()='Policies'] | //a[normalize-space()='Policies'] | //*[normalize-space()='Policies'][not(.//*[normalize-space()='Policies'])]",
     "searchBody": "//*[@id='search-body']",
     "resultButton": "//*[@id='mainContent']/div[2]/div",
     "firstDiv": "//*[@id='mainContent']/div[2]",
