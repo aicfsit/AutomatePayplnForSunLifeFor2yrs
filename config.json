@@ -14,6 +14,7 @@
     "passwordXPath": "//*[@id='okta-signin-password']",
     "submitXPath": "//*[@id='okta-signin-submit']",
     "mfaDetectXPath": "//*[contains(@class,'mfa') or contains(text(),'verification') or contains(text(),'Verify')]",
+    "loginErrorXPath": "//*[@role='alert'][normalize-space()!=''] | //*[contains(normalize-space(.),'Username or password is incorrect')][not(.//*[contains(normalize-space(.),'Username or password is incorrect')])] | //*[contains(normalize-space(.),'account is locked')][not(.//*[contains(normalize-space(.),'account is locked')])]",
     "loginSuccessXPath": "//*[@id='root']",
     "loginSuccessUrl": "mysunlife.sunlife.com.hk/awb"
   },

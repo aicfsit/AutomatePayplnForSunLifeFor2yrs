@@ -27,6 +27,29 @@ namespace AutomatePayplnForSunLifeFor2yrs.Models
         public LoginConfig Login { get; set; }
         public XPathConfig XPaths { get; set; }
         public string TotalPayableLabel { get; set; }
+        // Alert settings are NOT here: they live in App.config (appSettings),
+        // loaded by EmailSettingsProvider.
+    }
+
+    // Failure alerts go through the in-house Email API, not SMTP.
+    public class EmailConfig
+    {
+        public bool Enabled { get; set; }
+        public string ApiBaseUrl { get; set; }
+        public string EndpointWithAttachment { get; set; }
+        public string ClientId { get; set; }
+        public string ClientSecret { get; set; }
+
+        public string FromEmail { get; set; }
+        public string FromPassword { get; set; }
+        public string Host { get; set; }
+        public string DisplayName { get; set; }
+        public string UserId { get; set; }
+
+        // Semicolon-separated recipient list.
+        public string To { get; set; }
+        public string Cc { get; set; }
+        public int TimeoutSec { get; set; }
     }
 
     // One active row of dbo.AutomationCredentials: a portal login plus the
@@ -55,6 +78,9 @@ namespace AutomatePayplnForSunLifeFor2yrs.Models
         public string PasswordXPath { get; set; }
         public string SubmitXPath { get; set; }
         public string MfaDetectXPath { get; set; }
+        // Matches the red "Username or password is incorrect" banner, so a bad
+        // credential is reported as such instead of timing out on MFA.
+        public string LoginErrorXPath { get; set; }
         public string LoginSuccessXPath { get; set; }
         public string LoginSuccessUrl { get; set; }
     }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Support.UI;
@@ -234,6 +235,44 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             }
 
             return true;
+        }
+
+        // Save a PNG of the current screen for attaching to a failure alert.
+        // Returns the file path, or null if the shot could not be taken (for
+        // example the browser has already died).
+        public string CaptureScreenshot(string folder, string namePrefix)
+        {
+            try
+            {
+                ITakesScreenshot shooter = _driver as ITakesScreenshot;
+                if (shooter == null)
+                {
+                    return null;
+                }
+
+                if (!Directory.Exists(folder))
+                {
+                    Directory.CreateDirectory(folder);
+                }
+
+                string safePrefix = namePrefix;
+                foreach (char c in Path.GetInvalidFileNameChars())
+                {
+                    safePrefix = safePrefix.Replace(c, '_');
+                }
+
+                string path = Path.Combine(folder, safePrefix + "_" +
+                    DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png");
+
+                shooter.GetScreenshot().SaveAsFile(path);
+                Console.WriteLine("Screenshot saved: " + path);
+                return path;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("WARNING: could not capture screenshot: " + ex.Message);
+                return null;
+            }
         }
 
         public string CurrentWindowHandle()

@@ -14,6 +14,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- ConfigurationManager.AppSettings, for the App.config alert settings. -->
+    <Reference Include="System.Configuration" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Selenium.WebDriver" Version="4.18.1" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="PdfPig" Version="0.1.8" />

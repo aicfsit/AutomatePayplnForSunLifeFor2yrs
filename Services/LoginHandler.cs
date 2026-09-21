@@ -43,7 +43,7 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             // Step 1: click the sign-in button to open the Okta login page.
             // Step 1: click the sign-in button to open the Okta login page.
             // The button has style="display:none" (SSO pattern), so a normal click
-            // won't work — we fire it via JavaScript with ClickHidden.
+            // won't work ï¿½ we fire it via JavaScript with ClickHidden.
             if (!string.IsNullOrEmpty(_config.Login.SignInButtonXPath))
             {
                 Console.WriteLine("Clicking sign-in button...");
@@ -72,6 +72,13 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
 
             // Give Okta a moment to either log in or present an MFA challenge.
             _helper.Delay(3000);
+
+            // A rejected credential shows a banner and stays on the form. Wait
+            // for whichever comes first, the banner or the redirect, instead of
+            // sampling once: on this portal the banner can take several seconds,
+            // and missing it means sitting through the whole MFA timeout and
+            // then reporting something misleading.
+            WaitForLoginOutcome();
 
             HandleMfaIfPresent();
 
@@ -120,6 +127,86 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             }
         }
 
+        // Poll until the portal either lets us through or shows a rejection.
+        // Returns normally on success; throws with the on-screen reason if the
+        // credentials were refused. Falls through quietly on timeout so the MFA
+        // wait can still take over.
+        private void WaitForLoginOutcome()
+        {
+            int waited = 0;
+            int interval = 1000;
+            int timeoutMs = (_config.ElementWaitTimeoutSec > 0
+                ? _config.ElementWaitTimeoutSec : 30) * 1000;
+
+            while (waited < timeoutMs)
+            {
+                if (HasLanded())
+                {
+                    return;
+                }
+
+                ThrowIfRejected();
+
+                _helper.Delay(interval);
+                waited += interval;
+            }
+        }
+
+        // Throws if the rejection banner is on screen right now.
+        private void ThrowIfRejected()
+        {
+            string reason = ReadLoginError();
+            if (reason == null)
+            {
+                return;
+            }
+
+            throw new Exception("Login rejected for user '" + _config.Username +
+                "': " + reason);
+        }
+
+        // The banner text, or null when there is no rejection showing.
+        private string ReadLoginError()
+        {
+            if (string.IsNullOrEmpty(_config.Login.LoginErrorXPath))
+            {
+                return null;
+            }
+
+            // Already through: whatever is on screen is not a login error.
+            if (HasLanded())
+            {
+                return null;
+            }
+
+            IWebElement error = _helper.TryFind(_config.Login.LoginErrorXPath);
+            if (error == null)
+            {
+                return null;
+            }
+
+            string text = null;
+            try
+            {
+                if (!error.Displayed)
+                {
+                    return null;
+                }
+                text = error.Text;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrEmpty(text))
+            {
+                text = "the portal rejected the sign-in";
+            }
+
+            return text.Replace(Environment.NewLine, " ").Trim();
+        }
+
         // If an MFA screen is detected, pause and let the operator complete it manually.
         
         private void HandleMfaIfPresent()
@@ -163,6 +250,12 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                     Console.WriteLine("Verification complete, continuing.");
                     return;
                 }
+
+                // A rejection can also surface here (a wrong MFA code, or a
+                // slow credential error). Stop waiting and report it rather
+                // than burning the full timeout.
+                ThrowIfRejected();
+
                 _helper.Delay(interval);
                 waited += interval;
             }

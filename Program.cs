@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using AutomatePayplnForSunLifeFor2yrs.Models;
@@ -13,10 +14,12 @@ namespace AutomatePayplnForSunLifeFor2yrs
         {
             string configPath = "config.json";
             bool driverTestOnly = false;
+            bool emailTestOnly = false;
             string onlyEntity = null;
             bool expectEntityName = false;
 
-            // Usage: [config.json] [--test-driver] [--entity JUVO | --entity=JUVO]
+            // Usage: [config.json] [--test-driver] [--test-email]
+            //        [--entity JUVO | --entity=JUVO]
             foreach (string a in args)
             {
                 if (expectEntityName)
@@ -27,6 +30,10 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 else if (a.Equals("--test-driver", StringComparison.OrdinalIgnoreCase))
                 {
                     driverTestOnly = true;
+                }
+                else if (a.Equals("--test-email", StringComparison.OrdinalIgnoreCase))
+                {
+                    emailTestOnly = true;
                 }
                 else if (a.StartsWith("--entity=", StringComparison.OrdinalIgnoreCase))
                 {
@@ -48,10 +55,20 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 return;
             }
 
+            if (emailTestOnly)
+            {
+                RunEmailSelfTest();
+                return;
+            }
+
+            EmailNotifier notifier = null;
+
             try
             {
                 CredentialProvider provider = new CredentialProvider();
                 AppConfig config = provider.Load(configPath);
+
+                notifier = new EmailNotifier(EmailSettingsProvider.Load());
 
                 DatabaseService db = new DatabaseService(config.ConnectionString);
 
@@ -75,7 +92,22 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 // Validate everything against the database BEFORE opening a
                 // browser, so a bad AppKey or procedure name does not surface
                 // only after a manual MFA prompt.
-                List<EntityRun> runs = PrepareRuns(db, entities);
+                List<string> prepareProblems = new List<string>();
+                List<EntityRun> runs = PrepareRuns(db, entities, prepareProblems);
+
+                // An entity that could not even be prepared never reaches the
+                // browser, so this is the only place it gets reported.
+                if (prepareProblems.Count > 0 && notifier != null)
+                {
+                    notifier.SendAlert(
+                        "Paypln automation: " + prepareProblems.Count +
+                            " entity/entities could not start",
+                        "The following entities were skipped before the browser " +
+                        "opened:" + Environment.NewLine + Environment.NewLine +
+                        string.Join(Environment.NewLine, prepareProblems.ToArray()),
+                        null);
+                }
+
                 if (runs.Count == 0)
                 {
                     Console.WriteLine("Nothing to do. Exiting.");
@@ -93,7 +125,7 @@ namespace AutomatePayplnForSunLifeFor2yrs
                         "   policies: " + run.Policies.Count);
                     Console.WriteLine("################################################");
 
-                    all.AddRange(RunEntity(config, db, run));
+                    all.AddRange(RunEntity(config, db, run, notifier));
                 }
 
                 PrintSummary(all);
@@ -102,6 +134,22 @@ namespace AutomatePayplnForSunLifeFor2yrs
             {
                 Console.WriteLine("FATAL ERROR: " + ex.Message);
                 Console.WriteLine(ex.StackTrace);
+
+                if (notifier != null)
+                {
+                    notifier.SendAlert(
+                        "Paypln automation FAILED to run",
+                        "The automation stopped before completing." +
+                        Environment.NewLine + Environment.NewLine +
+                        "Machine : " + Environment.MachineName + Environment.NewLine +
+                        "Time    : " + DateTime.Now + Environment.NewLine +
+                        "Config  : " + configPath + Environment.NewLine +
+                        Environment.NewLine +
+                        "Error:" + Environment.NewLine + ex.Message +
+                        Environment.NewLine + Environment.NewLine +
+                        ex.StackTrace,
+                        null);
+                }
             }
             finally
             {
@@ -152,7 +200,8 @@ namespace AutomatePayplnForSunLifeFor2yrs
         // Validate each entity and load its policy list. An entity that cannot
         // be prepared is reported and skipped so the others still run.
         static List<EntityRun> PrepareRuns(
-            DatabaseService db, List<EntityRegistration> entities)
+            DatabaseService db, List<EntityRegistration> entities,
+            List<string> problems)
         {
             List<EntityRun> runs = new List<EntityRun>();
 
@@ -171,26 +220,24 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 if (string.IsNullOrEmpty(e.Username) ||
                     string.IsNullOrEmpty(e.Password))
                 {
-                    Console.WriteLine("  SKIPPED: Username or Password is empty " +
-                        "on this row.");
+                    Skip(problems, e, "Username or Password is empty on this row.");
                     continue;
                 }
                 Console.WriteLine("  portal user: " + e.Username);
 
                 if (string.IsNullOrEmpty(e.StoredProcedure))
                 {
-                    Console.WriteLine("  SKIPPED: StoredProcedure is empty. Set it " +
-                        "on this row, for example: UPDATE dbo.AutomationCredentials " +
+                    Skip(problems, e, "StoredProcedure is empty. Set it on this row, " +
+                        "for example: UPDATE dbo.AutomationCredentials " +
                         "SET StoredProcedure = '<proc name>' WHERE Id = " + e.Id + ";");
                     continue;
                 }
 
                 if (!db.ProcedureExists(e.StoredProcedure))
                 {
-                    Console.WriteLine("  SKIPPED: stored procedure '" +
-                        e.StoredProcedure + "' does not exist. Fix " +
-                        "StoredProcedure on dbo.AutomationCredentials row Id " +
-                        e.Id + ".");
+                    Skip(problems, e, "stored procedure '" + e.StoredProcedure +
+                        "' does not exist. Fix StoredProcedure on " +
+                        "dbo.AutomationCredentials row Id " + e.Id + ".");
                     continue;
                 }
 
@@ -200,8 +247,8 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 bool takesActCod = db.ProcedureHasActCodParameter(e.StoredProcedure);
                 if (takesActCod && string.IsNullOrEmpty(e.ActCod))
                 {
-                    Console.WriteLine("  SKIPPED: " + e.StoredProcedure + " takes an " +
-                        "ACTCOD parameter but ACTCOD is empty on row Id " + e.Id +
+                    Skip(problems, e, e.StoredProcedure + " takes an ACTCOD " +
+                        "parameter but ACTCOD is empty on row Id " + e.Id +
                         ". Set it: UPDATE dbo.AutomationCredentials " +
                         "SET ACTCOD = '<code>' WHERE Id = " + e.Id + ";");
                     continue;
@@ -221,8 +268,7 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("  SKIPPED: " + e.StoredProcedure +
-                        " failed: " + ex.Message);
+                    Skip(problems, e, e.StoredProcedure + " failed: " + ex.Message);
                     continue;
                 }
 
@@ -243,13 +289,24 @@ namespace AutomatePayplnForSunLifeFor2yrs
             return runs;
         }
 
+        // Report a skipped entity and record it so the alert email can list it.
+        // "nothing to process" is not recorded: no premiums due is normal.
+        static void Skip(List<string> problems, EntityRegistration e, string reason)
+        {
+            Console.WriteLine("  SKIPPED: " + reason);
+            problems.Add(e.Name + " (AppKey " + e.AppKey + ", row Id " + e.Id +
+                "): " + reason);
+        }
+
         // Each entity is a different portal user, so it gets its own browser
         // session: a fresh driver avoids carrying the previous Okta session
         // over and having to drive a logout flow.
         static List<ProcessResult> RunEntity(
-            AppConfig config, DatabaseService db, EntityRun run)
+            AppConfig config, DatabaseService db, EntityRun run,
+            EmailNotifier notifier)
         {
             IWebDriver driver = null;
+            SeleniumHelper helper = null;
 
             try
             {
@@ -277,7 +334,7 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 driver.Manage().Timeouts().AsynchronousJavaScript =
                     TimeSpan.FromSeconds(60);
 
-                SeleniumHelper helper = new SeleniumHelper(
+                helper = new SeleniumHelper(
                     driver, config.ElementWaitTimeoutSec, config.StepDelayMs);
 
                 LoginHandler login = new LoginHandler(driver, helper, config);
@@ -303,6 +360,41 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 // others. Record it and move on.
                 Console.WriteLine("ERROR: entity '" + run.Entity.Name +
                     "' aborted: " + ex.Message);
+
+                // Screenshot first, while the browser is still on the failing
+                // page. helper is null if the driver itself never started.
+                string shot = null;
+                if (helper != null)
+                {
+                    shot = helper.CaptureScreenshot(
+                        Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                            "ErrorScreenshots"),
+                        run.Entity.Name + "_failure");
+                }
+
+                if (notifier != null)
+                {
+                    notifier.SendAlert(
+                        "Paypln automation FAILED for " + run.Entity.Name,
+                        "Entity '" + run.Entity.Name + "' stopped before " +
+                        "processing its policies." + Environment.NewLine +
+                        Environment.NewLine +
+                        "Machine  : " + Environment.MachineName + Environment.NewLine +
+                        "Time     : " + DateTime.Now + Environment.NewLine +
+                        "Entity   : " + run.Entity.Name +
+                            " (AppKey " + run.Entity.AppKey + ")" +
+                            Environment.NewLine +
+                        "Username : " + run.Entity.Username + Environment.NewLine +
+                        "ACTCOD   : " + run.Entity.ActCod + Environment.NewLine +
+                        "Policies : " + run.Policies.Count + " were queued" +
+                            Environment.NewLine + Environment.NewLine +
+                        "Error:" + Environment.NewLine + ex.Message +
+                        (shot == null
+                            ? Environment.NewLine + Environment.NewLine +
+                              "(no screenshot: the browser was not running)"
+                            : ""),
+                        shot);
+                }
 
                 ProcessResult aborted = new ProcessResult();
                 aborted.Entity = run.Entity.Name;
@@ -354,6 +446,41 @@ namespace AutomatePayplnForSunLifeFor2yrs
                     try { driver.Quit(); }
                     catch { }
                 }
+            }
+        }
+
+        // Sends one alert through the real Email API so delivery can be checked
+        // without running the pipeline:
+        //   AutomatePayplnForSunLifeFor2yrs.exe --test-email
+        static void RunEmailSelfTest()
+        {
+            try
+            {
+                EmailConfig settings = EmailSettingsProvider.Load();
+                EmailNotifier notifier = new EmailNotifier(settings);
+
+                if (!notifier.IsEnabled)
+                {
+                    Console.WriteLine("FAILED: email alerts are not enabled. Check " +
+                        "email_enabled / email_api_base_url / failure_email_to in " +
+                        "App.config.");
+                    return;
+                }
+
+                Console.WriteLine("Sending test alert to " + settings.To + "...");
+                notifier.SendAlert(
+                    "Paypln automation: test alert",
+                    "This is a test of the failure-alert email." +
+                    Environment.NewLine + Environment.NewLine +
+                    "Machine : " + Environment.MachineName + Environment.NewLine +
+                    "Time    : " + DateTime.Now + Environment.NewLine +
+                    Environment.NewLine +
+                    "If you received this, real failures will reach you too.",
+                    null);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("FAILED: " + ex.Message);
             }
         }
 
