@@ -278,12 +278,12 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             return list;
         }
 
-        // UPDATE paypln SET clnprmamt=@amt WHERE polrefno=@ref AND planyr=2
         public int UpdatePremiumAmount(string polRefNo, decimal amount)
         {
             string sql =
-                "UPDATE paypln SET clnprmamt = @amt,recdat=getdate(),recusr='system' " +
-                "WHERE polrefno = @ref AND planyr = 2";
+                "UPDATE paypln SET clnprmamt = @amt, recdat = getdate(), recusr = 'system' " +
+                "WHERE polrefno = @ref AND planyr = 2 " +
+                "AND (clnprmamt <> @amt OR clnprmamt IS NULL)";
 
             using (SqlConnection conn = new SqlConnection(_connectionString))
             {
