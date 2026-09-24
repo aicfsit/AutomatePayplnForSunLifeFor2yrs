@@ -2,6 +2,10 @@
   "url": "https://mysunlife.sunlife.com.hk/awb/#/login",
   "connectionString": "Server=172.16.10.2;Database=ERP_IBS_04092026;User Id=sa;Password=!cig#2024;TrustServerCertificate=True;",
   "headless": false,
+  "hideWindow": true,
+
+  "dryRun": true,
+  "outputFile": "extraction-results.csv",
   "stepDelayMs": 1500,
   "pageLoadTimeoutSec": 60,
   "elementWaitTimeoutSec": 30,

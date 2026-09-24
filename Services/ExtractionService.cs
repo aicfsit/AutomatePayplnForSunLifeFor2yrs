@@ -13,10 +13,12 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
         private readonly DatabaseService _db;
         private readonly PdfAmountExtractor _pdf;
         private readonly string _entity;
+        private readonly ResultWriter _writer;
+        private readonly bool _dryRun;
 
         public ExtractionService(IWebDriver driver, SeleniumHelper helper,
             AppConfig config, DatabaseService db, PdfAmountExtractor pdf,
-            string entity)
+            string entity, ResultWriter writer, bool dryRun)
         {
             _driver = driver;
             _helper = helper;
@@ -24,6 +26,8 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             _db = db;
             _pdf = pdf;
             _entity = entity;
+            _writer = writer;
+            _dryRun = dryRun;
         }
 
         public List<ProcessResult> Run(List<PolicyItem> policies)
@@ -43,13 +47,22 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                 ProcessResult result = ProcessWithRetry(policy, mainWindow);
                 results.Add(result);
 
-                try
+                if (_dryRun)
                 {
-                    _db.InsertLog(result);
+                    // Test mode: results go to the file, not the log table.
+                    _writer.Write(result);
                 }
-                catch (Exception logEx)
+                else
                 {
-                    Console.WriteLine("WARNING: could not write log row: " + logEx.Message);
+                    try
+                    {
+                        _db.InsertLog(result);
+                    }
+                    catch (Exception logEx)
+                    {
+                        Console.WriteLine("WARNING: could not write log row: " +
+                            logEx.Message);
+                    }
                 }
 
                 Console.WriteLine("Result: " + result.Status +
@@ -212,6 +225,13 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                 }
 
                 result.Amount = amount;
+
+                if (_dryRun)
+                {
+                    result.Status = "Success";
+                    result.Message = "Dry run: paypln not updated.";
+                    return result;
+                }
 
                 // j. Update paypln
                 int rows = _db.UpdatePremiumAmount(policy.PolRefNo, amount.Value);

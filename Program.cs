@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
@@ -12,9 +13,17 @@ namespace AutomatePayplnForSunLifeFor2yrs
     {
         static void Main(string[] args)
         {
+            // Clear out any chromedriver left behind by a previous run before
+            // anything else. A crash or a closed console window orphans the
+            // driver, and those keep a Chrome instance and its memory alive.
+            KillAllChromeDriverProcesses();
+            InstallExitHandlers();
+
             string configPath = "config.json";
             bool driverTestOnly = false;
             bool emailTestOnly = false;
+            bool waitOnExit = false;
+            bool portalTestOnly = false;
             string onlyEntity = null;
             bool expectEntityName = false;
 
@@ -31,9 +40,17 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 {
                     driverTestOnly = true;
                 }
+                else if (a.Equals("--test-portal", StringComparison.OrdinalIgnoreCase))
+                {
+                    portalTestOnly = true;
+                }
                 else if (a.Equals("--test-email", StringComparison.OrdinalIgnoreCase))
                 {
                     emailTestOnly = true;
+                }
+                else if (a.Equals("--wait", StringComparison.OrdinalIgnoreCase))
+                {
+                    waitOnExit = true;
                 }
                 else if (a.StartsWith("--entity=", StringComparison.OrdinalIgnoreCase))
                 {
@@ -60,6 +77,13 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 RunEmailSelfTest();
                 return;
             }
+
+            if (portalTestOnly)
+            {
+                RunPortalSelfTest(configPath);
+                return;
+            }
+
 
             EmailNotifier notifier = null;
 
@@ -92,21 +116,7 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 // Validate everything against the database BEFORE opening a
                 // browser, so a bad AppKey or procedure name does not surface
                 // only after a manual MFA prompt.
-                List<string> prepareProblems = new List<string>();
-                List<EntityRun> runs = PrepareRuns(db, entities, prepareProblems);
-
-                // An entity that could not even be prepared never reaches the
-                // browser, so this is the only place it gets reported.
-                if (prepareProblems.Count > 0 && notifier != null)
-                {
-                    notifier.SendAlert(
-                        "Paypln automation: " + prepareProblems.Count +
-                            " entity/entities could not start",
-                        "The following entities were skipped before the browser " +
-                        "opened:" + Environment.NewLine + Environment.NewLine +
-                        string.Join(Environment.NewLine, prepareProblems.ToArray()),
-                        null);
-                }
+                List<EntityRun> runs = PrepareRuns(db, entities);
 
                 if (runs.Count == 0)
                 {
@@ -125,7 +135,19 @@ namespace AutomatePayplnForSunLifeFor2yrs
                         "   policies: " + run.Policies.Count);
                     Console.WriteLine("################################################");
 
-                    all.AddRange(RunEntity(config, db, run, notifier));
+                    bool aborted;
+                    all.AddRange(RunEntity(config, db, run, notifier, out aborted));
+
+                    // Stop at the first entity that fails instead of carrying
+                    // on: whatever broke (login, driver, portal) will almost
+                    // certainly break the next one too.
+                    if (aborted)
+                    {
+                        Console.WriteLine("");
+                        Console.WriteLine("STOPPING: entity '" + run.Entity.Name +
+                            "' failed. Remaining entities will not run.");
+                        break;
+                    }
                 }
 
                 PrintSummary(all);
@@ -153,9 +175,100 @@ namespace AutomatePayplnForSunLifeFor2yrs
             }
             finally
             {
+                // Last line of defence: anything Quit could not close — after a
+                // crash, or a driver whose session was already gone — is swept
+                // up here so no Chrome is left running once this exits.
+                KillAllChromeDriverProcesses();
+
                 Console.WriteLine("");
-                Console.WriteLine("Press any key to exit...");
-                Console.ReadKey();
+
+                // Exit immediately once the work is done. Pass --wait to hold
+                // the window open when running by hand; unattended runs must
+                // never sit waiting for a keystroke nobody will press.
+                if (waitOnExit && !Console.IsInputRedirected)
+                {
+                    try
+                    {
+                        Console.WriteLine("Press any key to exit...");
+                        Console.ReadKey();
+                    }
+                    catch (Exception)
+                    {
+                        // No console attached; exit straight away.
+                    }
+                }
+            }
+        }
+
+        // The browser currently in use, so it can still be closed if the run is
+        // interrupted rather than finishing normally.
+        private static IWebDriver _activeDriver;
+
+        // Closes whatever is still open. Safe to call more than once.
+        private static void CleanupBrowser()
+        {
+            IWebDriver driver = _activeDriver;
+            _activeDriver = null;
+
+            if (driver != null)
+            {
+                try { driver.Quit(); }
+                catch { }
+            }
+
+            KillAllChromeDriverProcesses();
+        }
+
+        // Ctrl+C and a normal process exit both give us a chance to tidy up.
+        // A forced kill (taskkill /F, End Task) does not: the OS terminates the
+        // process without running any code, so nothing can cover that case.
+        private static void InstallExitHandlers()
+        {
+            try
+            {
+                Console.CancelKeyPress += delegate(
+                    object sender, ConsoleCancelEventArgs e)
+                {
+                    Console.WriteLine("");
+                    Console.WriteLine("Interrupted - closing the browser...");
+                    CleanupBrowser();
+                };
+
+                AppDomain.CurrentDomain.ProcessExit += delegate(
+                    object sender, EventArgs e)
+                {
+                    CleanupBrowser();
+                };
+            }
+            catch (Exception)
+            {
+                // Handlers are a safety net; never let them stop the run.
+            }
+        }
+
+        // Kills every chromedriver on the machine, not just ours: an orphan has
+        // no parent left to ask. Note this will also stop a chromedriver owned
+        // by another automation running at the same time on this box.
+        private static void KillAllChromeDriverProcesses()
+        {
+            var processes = Process.GetProcessesByName("chromedriver");
+            if (processes.Length == 0)
+            {
+                return;
+            }
+
+            Console.WriteLine("Killing " + processes.Length +
+                " leftover chromedriver process(es)...");
+
+            foreach (var process in processes)
+            {
+                try
+                {
+                    process.Kill();
+                }
+                catch
+                {
+                }
             }
         }
 
@@ -197,11 +310,10 @@ namespace AutomatePayplnForSunLifeFor2yrs
             return filtered;
         }
 
-        // Validate each entity and load its policy list. An entity that cannot
-        // be prepared is reported and skipped so the others still run.
+        // Validate each entity and load its policy list. Any entity that cannot
+        // be prepared stops the application — see Fail.
         static List<EntityRun> PrepareRuns(
-            DatabaseService db, List<EntityRegistration> entities,
-            List<string> problems)
+            DatabaseService db, List<EntityRegistration> entities)
         {
             List<EntityRun> runs = new List<EntityRun>();
 
@@ -220,25 +332,23 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 if (string.IsNullOrEmpty(e.Username) ||
                     string.IsNullOrEmpty(e.Password))
                 {
-                    Skip(problems, e, "Username or Password is empty on this row.");
-                    continue;
+                    Fail(db, e, "Username or Password is empty on " +
+                        "dbo.AutomationCredentials row Id " + e.Id + ".");
                 }
                 Console.WriteLine("  portal user: " + e.Username);
 
                 if (string.IsNullOrEmpty(e.StoredProcedure))
                 {
-                    Skip(problems, e, "StoredProcedure is empty. Set it on this row, " +
+                    Fail(db, e, "StoredProcedure is empty. Set it on this row, " +
                         "for example: UPDATE dbo.AutomationCredentials " +
                         "SET StoredProcedure = '<proc name>' WHERE Id = " + e.Id + ";");
-                    continue;
                 }
 
                 if (!db.ProcedureExists(e.StoredProcedure))
                 {
-                    Skip(problems, e, "stored procedure '" + e.StoredProcedure +
+                    Fail(db, e, "stored procedure '" + e.StoredProcedure +
                         "' does not exist. Fix StoredProcedure on " +
                         "dbo.AutomationCredentials row Id " + e.Id + ".");
-                    continue;
                 }
 
                 // Entities share one procedure and are separated by ACTCOD.
@@ -247,11 +357,10 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 bool takesActCod = db.ProcedureHasActCodParameter(e.StoredProcedure);
                 if (takesActCod && string.IsNullOrEmpty(e.ActCod))
                 {
-                    Skip(problems, e, e.StoredProcedure + " takes an ACTCOD " +
+                    Fail(db, e, e.StoredProcedure + " takes an ACTCOD " +
                         "parameter but ACTCOD is empty on row Id " + e.Id +
                         ". Set it: UPDATE dbo.AutomationCredentials " +
                         "SET ACTCOD = '<code>' WHERE Id = " + e.Id + ";");
-                    continue;
                 }
                 if (!takesActCod && !string.IsNullOrEmpty(e.ActCod))
                 {
@@ -268,8 +377,8 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 }
                 catch (Exception ex)
                 {
-                    Skip(problems, e, e.StoredProcedure + " failed: " + ex.Message);
-                    continue;
+                    Fail(db, e, e.StoredProcedure + " failed: " + ex.Message);
+                    return null; // unreachable: Fail always throws.
                 }
 
                 Console.WriteLine("  " + policies.Count + " policies returned by " +
@@ -289,13 +398,34 @@ namespace AutomatePayplnForSunLifeFor2yrs
             return runs;
         }
 
-        // Report a skipped entity and record it so the alert email can list it.
-        // "nothing to process" is not recorded: no premiums due is normal.
-        static void Skip(List<string> problems, EntityRegistration e, string reason)
+        // Any problem preparing an entity stops the whole application: it is
+        // logged to the console and to PremiumExtractionLog, then thrown so
+        // Main reports it and emails the alert. Never returns.
+        //
+        // "Nothing to process" does NOT come through here — no premiums due is
+        // a normal night, not a failure.
+        static void Fail(DatabaseService db, EntityRegistration e, string reason)
         {
-            Console.WriteLine("  SKIPPED: " + reason);
-            problems.Add(e.Name + " (AppKey " + e.AppKey + ", row Id " + e.Id +
-                "): " + reason);
+            string message = "Entity '" + e.Name + "' (AppKey " + e.AppKey +
+                "): " + reason;
+
+            Console.WriteLine("  FATAL: " + message);
+
+            try
+            {
+                ProcessResult failed = new ProcessResult();
+                failed.Entity = e.Name;
+                failed.Status = "Failed";
+                failed.Message = message;
+                db.InsertLog(failed);
+            }
+            catch (Exception logEx)
+            {
+                Console.WriteLine("  (could not write log row: " +
+                    logEx.Message + ")");
+            }
+
+            throw new Exception(message + " Stopping the application.");
         }
 
         // Each entity is a different portal user, so it gets its own browser
@@ -303,10 +433,11 @@ namespace AutomatePayplnForSunLifeFor2yrs
         // over and having to drive a logout flow.
         static List<ProcessResult> RunEntity(
             AppConfig config, DatabaseService db, EntityRun run,
-            EmailNotifier notifier)
+            EmailNotifier notifier, out bool aborted)
         {
             IWebDriver driver = null;
             SeleniumHelper helper = null;
+            aborted = false;
 
             try
             {
@@ -314,13 +445,28 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 config.Password = run.Entity.Password;
 
                 ChromeOptions options = new ChromeOptions();
-                options.AddArgument("--start-maximized");
                 options.AddArgument("--disable-notifications");
                 options.AddArgument("--disable-popup-blocking");
+
                 if (config.Headless)
                 {
+                    // Note: the SunLife portal sits behind Akamai, which blocks
+                    // headless Chrome outright with "Access Denied" before the
+                    // login page ever renders. Prefer hideWindow instead.
                     options.AddArgument("--headless=new");
                     options.AddArgument("--window-size=1920,1080");
+                }
+                else if (config.HideWindow)
+                {
+                    // A real, visible-to-Chrome browser (so Akamai serves the
+                    // page normally) parked far off-screen, so nothing appears
+                    // on the desktop. Needs an interactive session to run in.
+                    options.AddArgument("--window-size=1920,1080");
+                    options.AddArgument("--window-position=-32000,-32000");
+                }
+                else
+                {
+                    options.AddArgument("--start-maximized");
                 }
 
                 // Resolves a chromedriver.exe whose major version matches the
@@ -330,6 +476,8 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 driver = ChromeDriverFactory.Create(options, config.PageLoadTimeoutSec);
                 driver.Manage().Timeouts().PageLoad =
                     TimeSpan.FromSeconds(config.PageLoadTimeoutSec);
+                _activeDriver = driver;
+
                 // Required for the blob fetch in PdfAmountExtractor.
                 driver.Manage().Timeouts().AsynchronousJavaScript =
                     TimeSpan.FromSeconds(60);
@@ -349,15 +497,26 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 PdfAmountExtractor pdf =
                     new PdfAmountExtractor(driver, config.TotalPayableLabel);
 
+                ResultWriter writer = new ResultWriter(config.OutputFile);
+                if (config.DryRun)
+                {
+                    Console.WriteLine("DRY RUN: nothing will be written to " +
+                        "paypln or PremiumExtractionLog.");
+                    Console.WriteLine("Results file: " + writer.Path_);
+                }
+
                 ExtractionService extractor = new ExtractionService(
-                    driver, helper, config, db, pdf, run.Entity.Name);
+                    driver, helper, config, db, pdf, run.Entity.Name,
+                    writer, config.DryRun);
 
                 return extractor.Run(run.Policies);
             }
             catch (Exception ex)
             {
-                // One entity failing (bad login, MFA timeout) must not stop the
-                // others. Record it and move on.
+                // Caught here so the screenshot and the alert can be produced
+                // while the browser is still up; the caller then stops the run.
+                aborted = true;
+
                 Console.WriteLine("ERROR: entity '" + run.Entity.Name +
                     "' aborted: " + ex.Message);
 
@@ -396,25 +555,39 @@ namespace AutomatePayplnForSunLifeFor2yrs
                         shot);
                 }
 
-                ProcessResult aborted = new ProcessResult();
-                aborted.Entity = run.Entity.Name;
-                aborted.Status = "Failed";
-                aborted.Message = "Entity aborted before processing: " + ex.Message;
+                ProcessResult abortedRow = new ProcessResult();
+                abortedRow.Entity = run.Entity.Name;
+                abortedRow.Status = "Failed";
+                abortedRow.Message = "Entity aborted before processing: " + ex.Message;
 
-                try { db.InsertLog(aborted); }
+                try { db.InsertLog(abortedRow); }
                 catch { }
 
                 List<ProcessResult> one = new List<ProcessResult>();
-                one.Add(aborted);
+                one.Add(abortedRow);
                 return one;
             }
             finally
             {
+                // Closes the browser and its chromedriver. Quit can fail when
+                // the session has already died, so report it instead of
+                // swallowing it — that is the case that leaves Chrome running.
                 if (driver != null)
                 {
-                    try { driver.Quit(); }
-                    catch { }
+                    try
+                    {
+                        driver.Quit();
+                        Console.WriteLine("Browser closed for " +
+                            run.Entity.Name + ".");
+                    }
+                    catch (Exception quitEx)
+                    {
+                        Console.WriteLine("WARNING: could not close the browser " +
+                            "cleanly (" + quitEx.Message +
+                            "); it will be cleaned up at exit.");
+                    }
                 }
+                _activeDriver = null;
             }
         }
         // Checks Chrome/ChromeDriver version matching on its own, without
@@ -438,6 +611,92 @@ namespace AutomatePayplnForSunLifeFor2yrs
             catch (Exception ex)
             {
                 Console.WriteLine("FAILED: " + ex.Message);
+            }
+            finally
+            {
+                if (driver != null)
+                {
+                    try { driver.Quit(); }
+                    catch { }
+                }
+            }
+        }
+
+        // Loads the portal's login page in both browser modes and reports which
+        // ones the WAF serves. Read-only: no credentials are entered and the
+        // database is never touched.
+        //   AutomatePayplnForSunLifeFor2yrs.exe --test-portal
+        static void RunPortalSelfTest(string configPath)
+        {
+            try
+            {
+                AppConfig config = new CredentialProvider().Load(configPath);
+                Console.WriteLine("Checking: " + config.Url);
+                Console.WriteLine("");
+
+                CheckPortalMode(config, true, "headless        ");
+                CheckPortalMode(config, false, "off-screen window");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("FAILED: " + ex.Message);
+            }
+        }
+
+        static void CheckPortalMode(AppConfig config, bool headless, string label)
+        {
+            IWebDriver driver = null;
+            try
+            {
+                ChromeOptions options = new ChromeOptions();
+                options.AddArgument("--disable-notifications");
+                options.AddArgument("--disable-popup-blocking");
+                options.AddArgument("--window-size=1920,1080");
+                if (headless)
+                {
+                    options.AddArgument("--headless=new");
+                }
+                else
+                {
+                    options.AddArgument("--window-position=-32000,-32000");
+                }
+
+                driver = ChromeDriverFactory.Create(options, config.PageLoadTimeoutSec);
+                driver.Navigate().GoToUrl(config.Url);
+                System.Threading.Thread.Sleep(8000);
+
+                string title = driver.Title ?? "";
+                string body = "";
+                try
+                {
+                    body = driver.FindElement(By.TagName("body")).Text ?? "";
+                }
+                catch (Exception)
+                {
+                }
+
+                bool blocked =
+                    body.IndexOf("Access Denied", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    title.IndexOf("Access Denied", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                Console.WriteLine(label + " : " +
+                    (blocked ? "BLOCKED by the WAF" : "page served"));
+                Console.WriteLine("                   title = '" + title.Trim() + "'");
+
+                foreach (string line in body.Split('\n'))
+                {
+                    string t = line.Trim();
+                    if (t.StartsWith("Reference #") ||
+                        t.IndexOf("edgesuite", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        Console.WriteLine("                   " + t);
+                    }
+                }
+                Console.WriteLine("");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(label + " : ERROR " + ex.Message);
             }
             finally
             {

@@ -59,7 +59,6 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
                 model["strBody"] = BuildHtmlBody(body);
                 model["IsBodyHTML"] = true;
                 model["strFromEmailId"] = _cfg.FromEmail;
-                model["strPassword"] = _cfg.FromPassword;
                 model["strHost"] = _cfg.Host ?? "";
                 model["strDisplayName"] = _cfg.DisplayName ?? "";
                 model["userid"] = _cfg.UserId ?? "PayplnAutomation";

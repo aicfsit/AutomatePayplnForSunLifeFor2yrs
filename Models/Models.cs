@@ -17,7 +17,16 @@ namespace AutomatePayplnForSunLifeFor2yrs.Models
         // StoredProcedure drive the run. config.json only has to know how to
         // reach the database.
 
+        // Akamai blocks headless Chrome on the portal, so headless is not
+        // usable there. HideWindow runs a normal Chrome off-screen instead:
+        // nothing is visible, but the browser is real as far as the site sees.
         public bool Headless { get; set; }
+        public bool HideWindow { get; set; }
+
+        // While testing: never touch paypln or PremiumExtractionLog, write the
+        // results to OutputFile instead.
+        public bool DryRun { get; set; }
+        public string OutputFile { get; set; }
         public int StepDelayMs { get; set; }
         public int PageLoadTimeoutSec { get; set; }
         public int ElementWaitTimeoutSec { get; set; }
@@ -41,7 +50,6 @@ namespace AutomatePayplnForSunLifeFor2yrs.Models
         public string ClientSecret { get; set; }
 
         public string FromEmail { get; set; }
-        public string FromPassword { get; set; }
         public string Host { get; set; }
         public string DisplayName { get; set; }
         public string UserId { get; set; }

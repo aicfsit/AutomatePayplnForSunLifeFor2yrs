@@ -34,7 +34,6 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             cfg.ClientSecret = Get("email_client_secret", "");
 
             cfg.FromEmail = Get("email_from", "DoNotReply@cfsgroup.com");
-            cfg.FromPassword = Get("email_pwd", "");
             cfg.Host = Get("email_host", "");
             cfg.DisplayName = Get("email_display_name", "Paypln Automation");
             cfg.UserId = Get("email_userid", "PayplnAutomation");
