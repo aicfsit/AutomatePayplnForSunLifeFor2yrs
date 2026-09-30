@@ -11,11 +11,16 @@ namespace AutomatePayplnForSunLifeFor2yrs
 {
     class Program
     {
-        static void Main(string[] args)
+        // Returns 0 when everything succeeded, 1 otherwise, so Task Scheduler
+        // (and any monitoring on top of it) can tell a good run from a bad one.
+        static int Main(string[] args)
         {
+            int exitCode = 0;
+
             // Clear out any chromedriver left behind by a previous run before
             // anything else. A crash or a closed console window orphans the
             // driver, and those keep a Chrome instance and its memory alive.
+            RunLog.Start();
             KillAllChromeDriverProcesses();
             InstallExitHandlers();
 
@@ -69,19 +74,19 @@ namespace AutomatePayplnForSunLifeFor2yrs
             if (driverTestOnly)
             {
                 RunDriverSelfTest();
-                return;
+                return 0;
             }
 
             if (emailTestOnly)
             {
                 RunEmailSelfTest();
-                return;
+                return 0;
             }
 
             if (portalTestOnly)
             {
                 RunPortalSelfTest(configPath);
-                return;
+                return 0;
             }
 
 
@@ -110,18 +115,20 @@ namespace AutomatePayplnForSunLifeFor2yrs
                         "dbo.AutomationCredentials" +
                         (onlyEntity == null
                             ? "." : " matching --entity " + onlyEntity + "."));
-                    return;
+                    exitCode = 1;
+                    return exitCode;
                 }
 
                 // Validate everything against the database BEFORE opening a
                 // browser, so a bad AppKey or procedure name does not surface
                 // only after a manual MFA prompt.
-                List<EntityRun> runs = PrepareRuns(db, entities);
+                List<EntityRun> runs = PrepareRuns(db, entities,
+                    new ResultWriter(config.OutputFile), config.DryRun);
 
                 if (runs.Count == 0)
                 {
                     Console.WriteLine("Nothing to do. Exiting.");
-                    return;
+                    return exitCode;
                 }
 
                 List<ProcessResult> all = new List<ProcessResult>();
@@ -150,10 +157,35 @@ namespace AutomatePayplnForSunLifeFor2yrs
                     }
                 }
 
-                PrintSummary(all);
+                string summary = BuildSummary(all);
+                Console.WriteLine(summary);
+
+                // A failed policy anywhere means the run did not fully succeed.
+                foreach (ProcessResult r in all)
+                {
+                    if (r.Status != "Success" && r.Status != "Disabled")
+                    {
+                        exitCode = 1;
+                    }
+                }
+
+                // Always sent, so that receiving nothing means the run never
+                // started at all, rather than "it probably went fine".
+                if (notifier != null)
+                {
+                    notifier.SendSummary(
+                        (exitCode == 0 ? "Paypln automation OK" :
+                                         "Paypln automation completed WITH FAILURES") +
+                        " - " + Environment.MachineName,
+                        "Machine : " + Environment.MachineName + Environment.NewLine +
+                        "Time    : " + DateTime.Now + Environment.NewLine +
+                        "Log     : " + RunLog.Path + Environment.NewLine +
+                        Environment.NewLine + summary);
+                }
             }
             catch (Exception ex)
             {
+                exitCode = 1;
                 Console.WriteLine("FATAL ERROR: " + ex.Message);
                 Console.WriteLine(ex.StackTrace);
 
@@ -181,6 +213,7 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 KillAllChromeDriverProcesses();
 
                 Console.WriteLine("");
+                RunLog.Stop();
 
                 // Exit immediately once the work is done. Pass --wait to hold
                 // the window open when running by hand; unattended runs must
@@ -198,6 +231,9 @@ namespace AutomatePayplnForSunLifeFor2yrs
                     }
                 }
             }
+
+            Console.WriteLine("Exit code: " + exitCode);
+            return exitCode;
         }
 
         // The browser currently in use, so it can still be closed if the run is
@@ -313,7 +349,8 @@ namespace AutomatePayplnForSunLifeFor2yrs
         // Validate each entity and load its policy list. Any entity that cannot
         // be prepared stops the application — see Fail.
         static List<EntityRun> PrepareRuns(
-            DatabaseService db, List<EntityRegistration> entities)
+            DatabaseService db, List<EntityRegistration> entities,
+            ResultWriter writer, bool dryRun)
         {
             List<EntityRun> runs = new List<EntityRun>();
 
@@ -332,21 +369,21 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 if (string.IsNullOrEmpty(e.Username) ||
                     string.IsNullOrEmpty(e.Password))
                 {
-                    Fail(db, e, "Username or Password is empty on " +
+                    Fail(db, writer, dryRun, e, "Username or Password is empty on " +
                         "dbo.AutomationCredentials row Id " + e.Id + ".");
                 }
                 Console.WriteLine("  portal user: " + e.Username);
 
                 if (string.IsNullOrEmpty(e.StoredProcedure))
                 {
-                    Fail(db, e, "StoredProcedure is empty. Set it on this row, " +
+                    Fail(db, writer, dryRun, e, "StoredProcedure is empty. Set it on this row, " +
                         "for example: UPDATE dbo.AutomationCredentials " +
                         "SET StoredProcedure = '<proc name>' WHERE Id = " + e.Id + ";");
                 }
 
                 if (!db.ProcedureExists(e.StoredProcedure))
                 {
-                    Fail(db, e, "stored procedure '" + e.StoredProcedure +
+                    Fail(db, writer, dryRun, e, "stored procedure '" + e.StoredProcedure +
                         "' does not exist. Fix StoredProcedure on " +
                         "dbo.AutomationCredentials row Id " + e.Id + ".");
                 }
@@ -357,7 +394,7 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 bool takesActCod = db.ProcedureHasActCodParameter(e.StoredProcedure);
                 if (takesActCod && string.IsNullOrEmpty(e.ActCod))
                 {
-                    Fail(db, e, e.StoredProcedure + " takes an ACTCOD " +
+                    Fail(db, writer, dryRun, e, e.StoredProcedure + " takes an ACTCOD " +
                         "parameter but ACTCOD is empty on row Id " + e.Id +
                         ". Set it: UPDATE dbo.AutomationCredentials " +
                         "SET ACTCOD = '<code>' WHERE Id = " + e.Id + ";");
@@ -377,7 +414,7 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 }
                 catch (Exception ex)
                 {
-                    Fail(db, e, e.StoredProcedure + " failed: " + ex.Message);
+                    Fail(db, writer, dryRun, e, e.StoredProcedure + " failed: " + ex.Message);
                     return null; // unreachable: Fail always throws.
                 }
 
@@ -404,26 +441,41 @@ namespace AutomatePayplnForSunLifeFor2yrs
         //
         // "Nothing to process" does NOT come through here — no premiums due is
         // a normal night, not a failure.
-        static void Fail(DatabaseService db, EntityRegistration e, string reason)
+        // Send a result row wherever this run's results are going: the CSV in a
+        // dry run, PremiumExtractionLog otherwise. A logging failure is
+        // reported but never stops the run.
+        static void RecordRow(DatabaseService db, ResultWriter writer,
+            bool dryRun, ProcessResult row)
+        {
+            if (dryRun)
+            {
+                writer.Write(row);
+                return;
+            }
+
+            try
+            {
+                db.InsertLog(row);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("WARNING: could not write log row: " + ex.Message);
+            }
+        }
+
+        static void Fail(DatabaseService db, ResultWriter writer, bool dryRun,
+            EntityRegistration e, string reason)
         {
             string message = "Entity '" + e.Name + "' (AppKey " + e.AppKey +
                 "): " + reason;
 
             Console.WriteLine("  FATAL: " + message);
 
-            try
-            {
-                ProcessResult failed = new ProcessResult();
-                failed.Entity = e.Name;
-                failed.Status = "Failed";
-                failed.Message = message;
-                db.InsertLog(failed);
-            }
-            catch (Exception logEx)
-            {
-                Console.WriteLine("  (could not write log row: " +
-                    logEx.Message + ")");
-            }
+            ProcessResult failed = new ProcessResult();
+            failed.Entity = e.Name;
+            failed.Status = "Failed";
+            failed.Message = message;
+            RecordRow(db, writer, dryRun, failed);
 
             throw new Exception(message + " Stopping the application.");
         }
@@ -438,6 +490,9 @@ namespace AutomatePayplnForSunLifeFor2yrs
             IWebDriver driver = null;
             SeleniumHelper helper = null;
             aborted = false;
+
+            // Declared out here so the failure path can log through it too.
+            ResultWriter writer = new ResultWriter(config.OutputFile);
 
             try
             {
@@ -469,6 +524,20 @@ namespace AutomatePayplnForSunLifeFor2yrs
                     options.AddArgument("--start-maximized");
                 }
 
+                // Chrome needs a desktop. Under Task Scheduler's "Run whether
+                // user is logged on or not" the process lands in session 0,
+                // which has none, and the browser fails in a way that looks
+                // like an unrelated portal error. Say what is actually wrong.
+                if (!Environment.UserInteractive)
+                {
+                    throw new Exception(
+                        "No interactive desktop session (session 0), so Chrome " +
+                        "cannot start. In Task Scheduler set the task to " +
+                        "'Run only when user is logged on', and keep a logged-on " +
+                        "session on this machine. Headless is not an option here: " +
+                        "the portal's WAF blocks headless Chrome.");
+                }
+
                 // Resolves a chromedriver.exe whose major version matches the
                 // installed Chrome and starts the service against that exact
                 // binary. See ChromeDriverFactory for why the path is explicit.
@@ -497,7 +566,6 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 PdfAmountExtractor pdf =
                     new PdfAmountExtractor(driver, config.TotalPayableLabel);
 
-                ResultWriter writer = new ResultWriter(config.OutputFile);
                 if (config.DryRun)
                 {
                     Console.WriteLine("DRY RUN: nothing will be written to " +
@@ -555,17 +623,39 @@ namespace AutomatePayplnForSunLifeFor2yrs
                         shot);
                 }
 
-                ProcessResult abortedRow = new ProcessResult();
-                abortedRow.Entity = run.Entity.Name;
-                abortedRow.Status = "Failed";
-                abortedRow.Message = "Entity aborted before processing: " + ex.Message;
+                // Log every policy that was queued, not just one row for the
+                // entity: each polrefno has to be accounted for even though
+                // nothing was extracted for it.
+                string reason = "Entity aborted before processing: " + ex.Message;
+                List<ProcessResult> rows = new List<ProcessResult>();
 
-                try { db.InsertLog(abortedRow); }
-                catch { }
+                foreach (PolicyItem queued in run.Policies)
+                {
+                    ProcessResult row = new ProcessResult();
+                    row.Entity = run.Entity.Name;
+                    row.PolRefNo = queued.PolRefNo;
+                    row.PolCod = queued.PolCod;
+                    row.Status = "Failed";
+                    row.Message = reason;
+                    rows.Add(row);
+                }
 
-                List<ProcessResult> one = new List<ProcessResult>();
-                one.Add(abortedRow);
-                return one;
+                // Nothing queued: still record that the entity failed.
+                if (rows.Count == 0)
+                {
+                    ProcessResult row = new ProcessResult();
+                    row.Entity = run.Entity.Name;
+                    row.Status = "Failed";
+                    row.Message = reason;
+                    rows.Add(row);
+                }
+
+                foreach (ProcessResult row in rows)
+                {
+                    RecordRow(db, writer, config.DryRun, row);
+                }
+
+                return rows;
             }
             finally
             {
@@ -743,7 +833,9 @@ namespace AutomatePayplnForSunLifeFor2yrs
             }
         }
 
-        static void PrintSummary(List<ProcessResult> results)
+        // Builds the run summary as text, so the same wording goes to the
+        // console, the log file and the summary email.
+        static string BuildSummary(List<ProcessResult> results)
         {
             // Counts per entity, in the order the entities were processed.
             List<string> order = new List<string>();
@@ -766,8 +858,9 @@ namespace AutomatePayplnForSunLifeFor2yrs
 
             int success = 0, disabled = 0, failed = 0;
 
-            Console.WriteLine("");
-            Console.WriteLine("==================== SUMMARY ====================");
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            sb.AppendLine("");
+            sb.AppendLine("==================== SUMMARY ====================");
             foreach (string key in order)
             {
                 int[] c = byEntity[key];
@@ -775,18 +868,20 @@ namespace AutomatePayplnForSunLifeFor2yrs
                 disabled += c[1];
                 failed += c[2];
 
-                Console.WriteLine(key.PadRight(16) +
+                sb.AppendLine(key.PadRight(16) +
                     " total=" + (c[0] + c[1] + c[2]) +
                     "  success=" + c[0] +
                     "  disabled=" + c[1] +
                     "  failed=" + c[2]);
             }
-            Console.WriteLine("-------------------------------------------------");
-            Console.WriteLine("Total processed : " + results.Count);
-            Console.WriteLine("Success         : " + success);
-            Console.WriteLine("Disabled/skipped: " + disabled);
-            Console.WriteLine("Failed          : " + failed);
-            Console.WriteLine("=================================================");
+            sb.AppendLine("-------------------------------------------------");
+            sb.AppendLine("Total processed : " + results.Count);
+            sb.AppendLine("Success         : " + success);
+            sb.AppendLine("Disabled/skipped: " + disabled);
+            sb.AppendLine("Failed          : " + failed);
+            sb.AppendLine("=================================================");
+
+            return sb.ToString();
         }
     }
 }

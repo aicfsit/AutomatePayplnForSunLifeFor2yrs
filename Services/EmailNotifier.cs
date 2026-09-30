@@ -34,6 +34,18 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             }
         }
 
+        // End-of-run summary, sent whether or not anything failed. Suppressed
+        // by summary_email_enabled=false.
+        public void SendSummary(string subject, string body)
+        {
+            if (_cfg == null || !_cfg.SummaryEnabled)
+            {
+                Console.WriteLine("Summary email disabled; not sending.");
+                return;
+            }
+            SendAlert(subject, body, null);
+        }
+
         // subject/body are plain text; body is wrapped into simple HTML.
         // attachmentPath may be null (for example when the browser never
         // started, so there is no screenshot to take).

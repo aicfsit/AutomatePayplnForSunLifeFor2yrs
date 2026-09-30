@@ -38,6 +38,7 @@ namespace AutomatePayplnForSunLifeFor2yrs.Services
             cfg.DisplayName = Get("email_display_name", "Paypln Automation");
             cfg.UserId = Get("email_userid", "PayplnAutomation");
             cfg.TimeoutSec = GetInt("email_timeout_sec", 120);
+            cfg.SummaryEnabled = GetBool("summary_email_enabled", true);
 
             return cfg;
         }

@@ -58,6 +58,10 @@ namespace AutomatePayplnForSunLifeFor2yrs.Models
         public string To { get; set; }
         public string Cc { get; set; }
         public int TimeoutSec { get; set; }
+
+        // Send an end-of-run summary even when nothing failed, so that no
+        // email unambiguously means "the run never started".
+        public bool SummaryEnabled { get; set; }
     }
 
     // One active row of dbo.AutomationCredentials: a portal login plus the
